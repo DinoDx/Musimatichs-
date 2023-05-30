@@ -2,7 +2,11 @@ from tensorflow.python.keras import Model
 from tensorflow.python.keras.layers import Input, Conv2D, ReLU, Flatten, Dense, Reshape, Conv2DTranspose, Activation
 from keras.layers.normalization.batch_normalization import BatchNormalization
 from tensorflow.python.keras import backend
+from tensorflow.python.keras.optimizers import adam_v2
+from tensorflow.python.keras.losses import MeanSquaredError
 import numpy as np
+import os
+import pickle
 
 
 class Autoencoder:
@@ -28,8 +32,10 @@ class Autoencoder:
     def build(self):
         self.build_encoder()
         self.build_decoder()
-        #self.build_autoencoder()
+        self.build_autoencoder()
 
+
+    #Encoder 
 
     def build_encoder(self):
         encoder_input = self.add_encoder_input()
@@ -39,19 +45,6 @@ class Autoencoder:
         self.model_input = encoder_input
 
         self.encoder = Model(encoder_input, bottleneck, name="encoder")
-
-    def build_decoder(self):
-        decoder_input = self.add_decoder_input()
-        dense_layer = self.add_dense_layer(decoder_input)
-        reshape_layer = self.add_reshape_layer(dense_layer)
-        conv_transpose_layers = self.add_conv_transpose_layers(reshape_layer)
-        decoder_output = self.add_decoder_output(conv_transpose_layers)
-
-        self.decoder = Model(decoder_input, decoder_output, name="decoder")
-
-
-    def build_autoendoder(self):
-        pass
 
 
     def add_encoder_input(self):
@@ -81,6 +74,7 @@ class Autoencoder:
         
         return conv_layer
     
+    
     def add_bottleneck(self, conv_layers):
         self.shape_before_bottleneck = backend.int_shape(conv_layers)[1:]
 
@@ -89,6 +83,18 @@ class Autoencoder:
 
         return dense_layer
     
+
+    #Decoder
+
+    def build_decoder(self):
+        decoder_input = self.add_decoder_input()
+        dense_layer = self.add_dense_layer(decoder_input)
+        reshape_layer = self.add_reshape_layer(dense_layer)
+        conv_transpose_layers = self.add_conv_transpose_layers(reshape_layer)
+        decoder_output = self.add_decoder_output(conv_transpose_layers)
+
+        self.decoder = Model(decoder_input, decoder_output, name="decoder")
+
 
     def add_decoder_input(self):
 
@@ -101,6 +107,7 @@ class Autoencoder:
         dense_layer = Dense(size_dense_layer, name="decoder_dense")(decoder_input)
 
         return dense_layer
+    
     
     def add_reshape_layer(self, dense_layer):
         reshape_layer = Reshape(self.shape_before_bottleneck)(dense_layer)
@@ -122,7 +129,7 @@ class Autoencoder:
                             kernel_size=self.conv_kernels[layer_index],
                             strides=self.conv_strides[layer_index],
                             padding="same",
-                            name=f"encoder_conv_layer_{layer_number}")
+                            name=f"decoder_conv_layer_{layer_number}")
         
         x = conv_transpose_layer(x)
         x = ReLU(name=f"decoder_relu_{layer_number}")(x)
@@ -142,12 +149,88 @@ class Autoencoder:
         output = Activation("sigmoid", name="sigmoid_layer")(x)
 
         return output
-         
+    
+
+    #Autoencoder
+
+    def build_autoencoder(self):
+        model_input = self.model_input
+        model_output = self.decoder(self.encoder(model_input))
+        self.model = Model(model_input, model_output, name="autoencode")
+        
+
+    def compile(self, learning_rate=0.0001):
+        optimizer = adam_v2.Adam(learning_rate=learning_rate)
+        loss = MeanSquaredError()
+        self.model.compile(optimizer=optimizer, loss=loss)
+
+
+    def train(self, x_train, batch_size, num_epochs):
+        self.model.fit(x_train,
+                       x_train,
+                       batch_size=batch_size,
+                       epochs=num_epochs,
+                       shuffle=True)    
+
+
+    def save(self, save_fold="."):
+        self.create_folder_if_doesnt_exist(save_fold)
+        self.save_params(save_fold)
+        self.save_weights(save_fold)
+
+
+    def create_folder_if_doesnt_exist(self, save_fold):
+        if not os.path.exists(save_fold):
+            os.makedirs(save_fold)
+
+
+    def save_params(self, save_fold):
+        parameters = [
+            self.input_shape,
+            self.conv_filters,
+            self.conv_kernels,
+            self.conv_strides,
+            self.latent_space_dim
+        ]
+
+        save_path = os.path.join(save_fold, "parameters.pkl")
+        with open(save_path, "wb") as f:
+            pickle.dump(parameters, f)
+
+        
+    def save_weights(self, save_fold):
+        save_path = os.path.join(save_fold, "weights.h5")
+        self.model.save_weights(save_path)
+
+    @classmethod
+    def load(cls, save_fold="."):
+        parameters_path = os.path.join(save_fold, "parameters.pkl")
+        with open(parameters_path, "rb") as f:
+            parameters = pickle.load(f)
+
+        model = Autoencoder(*parameters)
+
+        weights_path = os.path.join(save_fold, "weights.h5")
+        model.load_weights(weights_path)
+
+        return model
+    
+
+    def load_weights(self, weights_path):
+        self.model.load_weights(weights_path)
+
+
+    def reconstruct(self, images):
+        latent_representation = self.encoder.predict(images)
+        reconstructed_images = self.decoder.predict(latent_representation)
+
+        return reconstructed_images, latent_representation
+
 
     def summary(self):
         self.encoder.summary()
         self.decoder.summary()
-        #self.autoencoder.summary()
+        self.model.summary()
 
 
 if __name__ == "__main__":
